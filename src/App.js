@@ -1,4 +1,3 @@
-import { useState, useEffect, useRef, useCallback } from "react";
 const SYSTEM_PROMPT_NORMAL = `You are an expert English communication coach for students. You help students improve their English.
 
 HINDI SUPPORT: If the student writes or speaks in Hindi (or Hinglish), you must:
@@ -58,7 +57,7 @@ Rules: If mistakes exist reply MUST verbally correct first. Keep tone warm and e
 
 
 async function callGroq(messages, correctionMode = false) {
-  const res = await fetch("/api/chat", {
+  const res = await fetch("http://localhost:3001/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -435,6 +434,10 @@ export default function App() {
   const [isSpeaking, setIsSpeaking]   = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [correctionMode, setCorrectionMode] = useState(false);
+  const [autoSend, setAutoSend] = useState(true);
+  const [countdown, setCountdown] = useState(null); // null = not counting, 0-3 = counting
+  const [pendingText, setPendingText] = useState("");
+  const countdownTimer = useRef(null);
   const [selectedAvatar, setSelectedAvatar] = useState("aria");
   const [showSetup, setShowSetup] = useState(true);
   const [showAvatarPanel, setShowAvatarPanel] = useState(false);
@@ -565,6 +568,37 @@ export default function App() {
     await sendTurn(text, newApiMsgs);
   }, [isLoading, isSpeaking, apiMessages, sendTurn]);
 
+  const startCountdown = useCallback((text) => {
+    setPendingText(text);
+    setInput(text);
+    setCountdown(3);
+    let secs = 3;
+    countdownTimer.current = setInterval(() => {
+      secs -= 1;
+      setCountdown(secs);
+      if (secs <= 0) {
+        clearInterval(countdownTimer.current);
+        setCountdown(null);
+        setPendingText("");
+        handleSubmit(text);
+      }
+    }, 1000);
+  }, [handleSubmit]);
+
+  const cancelCountdown = useCallback(() => {
+    clearInterval(countdownTimer.current);
+    setCountdown(null);
+    setPendingText("");
+  }, []);
+
+  const sendNow = useCallback(() => {
+    clearInterval(countdownTimer.current);
+    const text = pendingText;
+    setCountdown(null);
+    setPendingText("");
+    handleSubmit(text);
+  }, [pendingText, handleSubmit]);
+
   const toggleMic = useCallback(() => {
     if (isSpeaking || isLoading) return;
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -582,11 +616,19 @@ export default function App() {
       }
       setInput(final + interim);
     };
-    rec.onend   = () => { setIsRecording(false); if (final.trim()) handleSubmit(final.trim()); };
+    rec.onend = () => {
+      setIsRecording(false);
+      if (!final.trim()) return;
+      if (autoSend) {
+        handleSubmit(final.trim());
+      } else {
+        startCountdown(final.trim());
+      }
+    };
     rec.onerror = (e) => { setIsRecording(false); console.warn("Mic:", e.error); };
     rec.start();
     setIsRecording(true);
-  }, [isRecording, isSpeaking, isLoading, handleSubmit]);
+  }, [isRecording, isSpeaking, isLoading, handleSubmit, autoSend, startCountdown]);
 
   const card = { background:"#161929", border:"1px solid #242840", borderRadius:16 };
 
@@ -708,6 +750,28 @@ export default function App() {
           {isSpeaking  && <div style={{ fontSize:"0.72rem", color:"#00e5c3", animation:"blinkA 1s infinite" }}>● SPEAKING</div>}
           {isRecording && <div style={{ fontSize:"0.72rem", color:"#ff6b6b", animation:"blinkA 0.7s infinite" }}>● LISTENING</div>}
           <style>{`@keyframes blinkA{0%,100%{opacity:1}50%{opacity:0.3}}`}</style>
+          {/* Auto Send Toggle */}
+          <div
+            onClick={() => { setAutoSend(v => !v); cancelCountdown(); }}
+            title="Auto Send: send immediately vs wait 3 seconds"
+            style={{ display:"flex", alignItems:"center", gap:8, cursor:"pointer",
+              background: autoSend ? "rgba(0,229,195,0.1)" : "rgba(108,99,255,0.08)",
+              border: `1px solid ${autoSend ? "rgba(0,229,195,0.3)" : "rgba(108,99,255,0.2)"}`,
+              borderRadius:20, padding:"5px 14px", transition:"all 0.25s", userSelect:"none" }}>
+            <div style={{
+              width:32, height:18, borderRadius:9, position:"relative", transition:"background 0.25s",
+              background: autoSend ? "#00e5c3" : "#242840" }}>
+              <div style={{
+                position:"absolute", top:2, left: autoSend ? 16 : 2,
+                width:14, height:14, borderRadius:"50%", background:"white",
+                transition:"left 0.25s", boxShadow:"0 1px 4px rgba(0,0,0,0.4)" }}/>
+            </div>
+            <span style={{ fontSize:"0.68rem", fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase",
+              color: autoSend ? "#00e5c3" : "#6b7099", transition:"color 0.25s" }}>
+              {autoSend ? "⚡ Auto Send" : "⏱ Wait Mode"}
+            </span>
+          </div>
+
           {/* Correction Mode Toggle */}
           <div
             onClick={() => setCorrectionMode(v => !v)}
@@ -926,6 +990,50 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {/* Countdown overlay */}
+      {countdown !== null && (
+        <div style={{ position:"relative", zIndex:1, background:"rgba(108,99,255,0.08)",
+          borderTop:"1px solid rgba(108,99,255,0.2)", padding:"10px 20px",
+          display:"flex", alignItems:"center", justifyContent:"space-between", gap:12 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+            {/* Countdown circle */}
+            <div style={{ position:"relative", width:40, height:40, flexShrink:0 }}>
+              <svg width="40" height="40" style={{ transform:"rotate(-90deg)" }}>
+                <circle cx="20" cy="20" r="16" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="3"/>
+                <circle cx="20" cy="20" r="16" fill="none" stroke="#6c63ff" strokeWidth="3"
+                  strokeDasharray={`${(countdown/3)*100} 100`}
+                  strokeLinecap="round"/>
+              </svg>
+              <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center",
+                justifyContent:"center", fontSize:"1rem", fontWeight:800, color:"#a5a0ff" }}>
+                {countdown}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize:"0.75rem", fontWeight:600, color:"#e8eaf0" }}>Sending in {countdown}s...</div>
+              <div style={{ fontSize:"0.68rem", color:"#6b7099", marginTop:1, maxWidth:200,
+                overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                "{pendingText}"
+              </div>
+            </div>
+          </div>
+          <div style={{ display:"flex", gap:8 }}>
+            <button onClick={cancelCountdown}
+              style={{ background:"rgba(255,107,107,0.15)", border:"1px solid rgba(255,107,107,0.3)",
+                color:"#ff6b6b", borderRadius:20, padding:"6px 14px", cursor:"pointer",
+                fontFamily:"inherit", fontSize:"0.75rem", fontWeight:700 }}>
+              ✕ Cancel
+            </button>
+            <button onClick={sendNow}
+              style={{ background:"linear-gradient(135deg,#6c63ff,#9c97ff)", border:"none",
+                color:"#fff", borderRadius:20, padding:"6px 14px", cursor:"pointer",
+                fontFamily:"inherit", fontSize:"0.75rem", fontWeight:700 }}>
+              ➤ Send Now
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Footer */}
       <div style={{ position:"relative", zIndex:1, display:"flex", alignItems:"center", gap:12, padding:"12px 20px 18px", borderTop:"1px solid #1e2135" }}>
