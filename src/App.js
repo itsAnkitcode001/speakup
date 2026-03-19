@@ -1,3 +1,4 @@
+import { useState, useEffect, useRef, useCallback } from "react";
 const SYSTEM_PROMPT_NORMAL = `You are an expert English communication coach for students. You help students improve their English.
 
 HINDI SUPPORT: If the student writes or speaks in Hindi (or Hinglish), you must:
