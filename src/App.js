@@ -451,6 +451,7 @@ export default function App() {
   const transcriptRef = useRef(null);
   const recogRef      = useRef(null);
   const mouthTimer    = useRef(null);
+  const pauseTimer    = useRef(null);
 
   useEffect(() => {
     if (transcriptRef.current) transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
@@ -604,33 +605,74 @@ export default function App() {
     if (isSpeaking || isLoading) return;
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) { alert("Use Chrome or Edge for mic support, or type below."); return; }
-    if (isRecording) { recogRef.current?.stop(); setIsRecording(false); return; }
+
+    if (isRecording) {
+      // Manual stop
+      recogRef.current?.stop();
+      setIsRecording(false);
+      clearTimeout(pauseTimer.current);
+      return;
+    }
+
     const rec = new SR();
-    rec.lang = "en-US"; rec.continuous = false; rec.interimResults = true;
+    rec.lang = "en-US";
+    rec.continuous = true;       // Keep recording continuously
+    rec.interimResults = true;
     recogRef.current = rec;
-    let final = "";
+
+    let fullTranscript = "";
+    let lastSpeechTime = Date.now();
+    const PAUSE_THRESHOLD = 2500; // 2.5 seconds of silence = done
+
     rec.onresult = (e) => {
       let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) final += e.results[i][0].transcript;
-        else interim += e.results[i][0].transcript;
+        if (e.results[i].isFinal) {
+          fullTranscript += e.results[i][0].transcript + " ";
+        } else {
+          interim += e.results[i][0].transcript;
+        }
       }
-      setInput(final + interim);
+      setInput(fullTranscript + interim);
+      lastSpeechTime = Date.now();
+
+      // Reset pause timer every time speech is detected
+      clearTimeout(pauseTimer.current);
+      pauseTimer.current = setTimeout(() => {
+        // User paused for PAUSE_THRESHOLD ms — stop and send
+        if (fullTranscript.trim()) {
+          rec.stop();
+          setIsRecording(false);
+          const text = fullTranscript.trim();
+          if (autoSend) {
+            handleSubmit(text);
+          } else {
+            startCountdown(text);
+          }
+        }
+      }, PAUSE_THRESHOLD);
     };
+
     rec.onend = () => {
+      // Only handle if not already handled by pause timer
       setIsRecording(false);
-      if (!final.trim()) return;
-      if (autoSend) {
-        handleSubmit(final.trim());
-      } else {
-        startCountdown(final.trim());
-      }
+      clearTimeout(pauseTimer.current);
     };
-    rec.onerror = (e) => { setIsRecording(false); console.warn("Mic:", e.error); };
+
+    rec.onerror = (e) => {
+      if (e.error === "no-speech") {
+        // Restart on no-speech to keep listening
+        if (isRecording) rec.start();
+        return;
+      }
+      setIsRecording(false);
+      clearTimeout(pauseTimer.current);
+      console.warn("Mic:", e.error);
+    };
+
     rec.start();
     setIsRecording(true);
   }, [isRecording, isSpeaking, isLoading, handleSubmit, autoSend, startCountdown]);
-
   const card = { background:"#161929", border:"1px solid #242840", borderRadius:16 };
 
 
@@ -686,6 +728,23 @@ export default function App() {
     <div style={{ height:"100vh", maxHeight:"100vh", overflow:"hidden", background:"linear-gradient(135deg,#080a12 0%,#0d0f1c 100%)", fontFamily:"'Segoe UI',sans-serif", color:"#e8eaf0", display:"flex", flexDirection:"column" }}>
       <div style={{ position:"fixed", inset:0, pointerEvents:"none", zIndex:0,
         background:"radial-gradient(ellipse 70% 60% at 30% 20%,rgba(108,99,255,0.12) 0%,transparent 70%),radial-gradient(ellipse 60% 50% at 75% 80%,rgba(0,229,195,0.08) 0%,transparent 70%)" }}/>
+
+      {/* Global mobile CSS */}
+      <style>{`
+        @media (max-width: 768px) {
+          .main-grid { grid-template-columns: 1fr !important; overflow-y: auto !important; height: auto !important; }
+          .left-col { min-height: 0 !important; }
+          .avatar-panel { min-height: 240px !important; aspect-ratio: 16/10; }
+          .avatar-circle { width: min(160px, 35vw) !important; height: min(160px, 35vw) !important; }
+          .right-col { min-height: 0; }
+          .transcript-box { height: 200px !important; min-height: 200px; }
+          .header-toggles { gap: 6px !important; }
+          .toggle-label { display: none; }
+        }
+        @media (max-width: 480px) {
+          .avatar-panel { min-height: 200px !important; }
+        }
+      `}</style>
 
       {/* SETUP SCREEN */}
       {showSetup && (
@@ -743,11 +802,11 @@ export default function App() {
       )}
 
       {/* Header */}
-      <div style={{ position:"relative", zIndex:1, display:"flex", alignItems:"center", justifyContent:"space-between", padding:"16px 28px 14px", borderBottom:"1px solid #1e2135" }}>
+      <div style={{ position:"relative", zIndex:1, display:"flex", alignItems:"center", justifyContent:"space-between", padding:"12px 16px 10px", borderBottom:"1px solid #1e2135", flexWrap:"wrap", gap:8 }}>
         <div style={{ fontFamily:"Georgia,serif", fontSize:"1.7rem", background:"linear-gradient(135deg,#fff 30%,#00e5c3)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>
           Speak<em>Up</em>
         </div>
-        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+        <div className="header-toggles" style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", justifyContent:"flex-end" }}>
           {isSpeaking  && <div style={{ fontSize:"0.72rem", color:"#00e5c3", animation:"blinkA 1s infinite" }}>● SPEAKING</div>}
           {isRecording && <div style={{ fontSize:"0.72rem", color:"#ff6b6b", animation:"blinkA 0.7s infinite" }}>● LISTENING</div>}
           <style>{`@keyframes blinkA{0%,100%{opacity:1}50%{opacity:0.3}}`}</style>
@@ -767,9 +826,9 @@ export default function App() {
                 width:14, height:14, borderRadius:"50%", background:"white",
                 transition:"left 0.25s", boxShadow:"0 1px 4px rgba(0,0,0,0.4)" }}/>
             </div>
-            <span style={{ fontSize:"0.68rem", fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase",
+            <span className="toggle-label" style={{ fontSize:"0.68rem", fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase",
               color: autoSend ? "#00e5c3" : "#6b7099", transition:"color 0.25s" }}>
-              {autoSend ? "⚡ Auto Send" : "⏱ Wait Mode"}
+              {autoSend ? "⚡ Auto" : "⏱ Wait"}
             </span>
           </div>
 
@@ -789,9 +848,9 @@ export default function App() {
                 width:14, height:14, borderRadius:"50%", background:"white",
                 transition:"left 0.25s", boxShadow:"0 1px 4px rgba(0,0,0,0.4)" }}/>
             </div>
-            <span style={{ fontSize:"0.68rem", fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase",
+            <span className="toggle-label" style={{ fontSize:"0.68rem", fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase",
               color: correctionMode ? "#ffd166" : "#6b7099", transition:"color 0.25s" }}>
-              {correctionMode ? "✏️ Correction Mode" : "Correction Mode"}
+              {correctionMode ? "✏️ Fix" : "Fix"}
             </span>
           </div>
           <button onClick={()=>setShowAvatarPanel(true)}
@@ -813,7 +872,9 @@ export default function App() {
       </div>
 
       {/* Body */}
-      <div style={{ position:"relative", zIndex:1, flex:1, display:"grid", gridTemplateColumns:"1fr 340px", gap:16, padding:"16px 20px 0 20px", minHeight:0, overflow:"hidden" }}>
+      <div className="main-grid" style={{ position:"relative", zIndex:1, flex:1, display:"grid",
+          gridTemplateColumns: typeof window !== "undefined" && window.innerWidth < 768 ? "1fr" : "1fr 340px",
+          gap:16, padding:"16px 20px 0 20px", minHeight:0, overflow:"hidden" }}>
 
         {/* LEFT */}
         <div style={{ display:"grid", gridTemplateRows:"1fr auto", gap:12, minHeight:0, overflow:"hidden" }}>
@@ -831,7 +892,7 @@ export default function App() {
             </div>
 
             {/* Avatar circle */}
-            <div style={{ position:"relative", zIndex:2,
+            <div className="avatar-circle" style={{ position:"relative", zIndex:2,
               width:"min(260px, 28vh)", height:"min(260px, 28vh)", borderRadius:"50%",
               background: AVATARS.find(a=>a.id===selectedAvatar)?.bg || "linear-gradient(145deg,#2a2d50,#1a1d38)",
               border: isSpeaking ? `3px solid ${AVATARS.find(a=>a.id===selectedAvatar)?.border || "#00e5c3"}cc` : `3px solid ${AVATARS.find(a=>a.id===selectedAvatar)?.border || "#6c63ff"}80`,
@@ -906,7 +967,7 @@ export default function App() {
         <div style={{ display:"grid", gridTemplateRows:"1fr auto", gap:12, minHeight:0, overflow:"hidden" }}>
           <div style={{ ...card, padding:14, display:"flex", flexDirection:"column", minHeight:0, overflow:"hidden" }}>
             <div style={{ fontSize:"0.65rem", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", color:"#6b7099", marginBottom:10 }}>Conversation</div>
-            <div ref={transcriptRef} style={{ flex:1, overflowY:"auto", display:"flex", flexDirection:"column", gap:10, scrollbarWidth:"thin", scrollbarColor:"#242840 transparent" }}>
+            <div className="transcript-box" ref={transcriptRef} style={{ flex:1, overflowY:"auto", display:"flex", flexDirection:"column", gap:10, scrollbarWidth:"thin", scrollbarColor:"#242840 transparent" }}>
               {messages.length===0 && <div style={{ color:"#6b7099", fontSize:"0.8rem", textAlign:"center", padding:"20px 0", fontStyle:"italic" }}>Your conversation will appear here…</div>}
               {messages.map((m,i) => (
                 <div key={i} style={{ display:"flex", gap:8, animation:"fadeUp 0.3s ease",
