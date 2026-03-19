@@ -58,7 +58,7 @@ Rules: If mistakes exist reply MUST verbally correct first. Keep tone warm and e
 
 
 async function callGroq(messages, correctionMode = false) {
-  const res = await fetch("http://localhost:3001/api/chat", {
+  const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
